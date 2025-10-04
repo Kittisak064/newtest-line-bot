@@ -1,42 +1,34 @@
-import pandas as pd
-from app.config import settings
+# app/services/classify.py
+from __future__ import annotations
+from typing import Literal, Tuple
+from .retrieve import get_faq_answer, get_product_info
 
-def build_intent_dict():
-    path = settings.faq_excel_path
-    try:
-        # FAQ Keywords
-        faq_df = pd.read_excel(path, sheet_name="FAQ")
-        faq_dict = {}
-        if "คีย์เวิร์ด" in faq_df.columns and "คำตอบ" in faq_df.columns:
-            for _, row in faq_df.iterrows():
-                if row["คีย์เวิร์ด"]:
-                    for kw in str(row["คีย์เวิร์ด"]).split(","):
-                        faq_dict[kw.strip()] = ("faq", row["คำตอบ"])
-        # Product Alias
-        prod_df = pd.read_excel(path, sheet_name="ข้อมูลสินค้าและราคา")
-        if "ชื่อสินค้าที่มักถูกเรียก" in prod_df.columns:
-            for _, row in prod_df.iterrows():
-                alias = str(row["ชื่อสินค้าที่มักถูกเรียก"])
-                if alias and alias != "nan":
-                    for kw in alias.split(","):
-                        faq_dict[kw.strip()] = ("product", row.to_dict())
-        return faq_dict
-    except Exception as e:
-        print("Error building intent dict:", e)
-        return {}
+Intent = Literal["product", "faq", "payment", "warranty", "unknown"]
 
-INTENT_DICT = build_intent_dict()
+PAYMENT_HINTS = ("โอน", "ชำระ", "ผ่อน", "บัตร", "เครดิต", "พร้อมเพย์", "ปลายทาง", "มัดจำ")
+WARRANTY_HINTS = ("ประกัน", "เคลม", "ซ่อม", "ศูนย์บริการ", "รับประกัน", "เงื่อนไขประกัน")
 
-def classify(text: str):
-    t = text.lower()
-    for kw, val in INTENT_DICT.items():
-        if kw.lower() in t:
-            return val
-    # Generic fallback
-    if "ราคา" in t:
-        return ("product", None)
-    if "ประกัน" in t:
-        return ("warranty", None)
-    if "ชำระ" in t or "โอน" in t:
-        return ("payment", None)
-    return ("unknown", None)
+def classify_intent(message: str) -> Tuple[Intent, str]:
+    """
+    คืน (intent, hint) โดยพยายามอิงข้อมูลในชีทเป็นหลัก
+    - ถ้า FAQ หรือ สินค้าตรง → ตีเป็นหมวดนั้น
+    - ถ้าพบคำใบ้การชำระเงิน/ประกัน → ชี้ intent ตามคีย์เวิร์ด (fallback แบบปลอดภัย)
+    """
+    q = (message or "").strip()
+    ql = q.lower()
+
+    # สินค้า
+    if get_product_info(q):
+        return "product", "product_by_alias"
+
+    # FAQ
+    if get_faq_answer(q):
+        return "faq", "faq_by_keyword"
+
+    # Payment / Warranty จากคำใบ้ (ไม่มีพึ่งชีทก็ไม่ error)
+    if any(k in ql for k in PAYMENT_HINTS):
+        return "payment", "payment_hint"
+    if any(k in ql for k in WARRANTY_HINTS):
+        return "warranty", "warranty_hint"
+
+    return "unknown", "no_match"
